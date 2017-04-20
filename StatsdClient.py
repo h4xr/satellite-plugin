@@ -5,6 +5,7 @@ Author: Saurabh Badhwar <sbadhwar@redhat.com>
 Date: 20/04/2017
 '''
 import os
+import time
 
 class StatsdClient:
     '''
@@ -30,20 +31,37 @@ class StatsdClient:
 
         self.host = "127.0.0.1"
         self.port = port
+        self.request = False
+        self.request_type = False
 
-    def __prepare_request(self, request_type):
+    def __build_request(self, request_type):
         '''
-        Prepares a request for reporting to statsd server
+        Builds a request for reporting to statsd server
         Params:
          - request_type: The typeof request to be made
         Returns: True on success, False on error
         '''
 
-        if request_type not in self.REQUEST_TYPES:
+        if request_type.lower() not in self.REQUEST_TYPES:
             return False
 
-        self.request = "%s.%s:%s|" + self.REQUEST_TYPES[type] + "%s"
+        self.request = "{}.{}:{}|" + self.REQUEST_TYPES[request_type.lower()] + "|{}"
+        self.request_type = self.REQUEST_TYPES[request_type.lower]
         return True
+
+    def __prepare_request(self, application_name, metric_name, metric_value):
+        '''
+        Prepares a request for the data that needs to be sent
+        Params:
+         - application_name: Name of the application
+         - metric_name: Name of the metric to be reported
+         - metric_value: The value of the metric
+        Returns: True on success, False on Failure
+        '''
+
+        if self.request == False or self.request_type == False:
+            return False
+        self.request = self.request.format(application_name, metric_name, metric_value, str(time.time()))
 
     def connect(self, host, port):
         '''
@@ -67,4 +85,6 @@ class StatsdClient:
         Returns: True on success/False on Failure
         '''
 
-        self.__prepare_request()
+        request_prep = self.__build_request('gauge')
+        if request_prep == False:
+            return False
