@@ -1,0 +1,10 @@
+#Python gitignore
+
+#Python caches
+*.pyc
+
+#Template files
+*.tmpl
+
+#Temporary Directory
+tmp/
