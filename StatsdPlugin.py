@@ -5,10 +5,12 @@ Description: Provides an interface for writing StatsD Plugins, collecting their
 Author: Saurabh Badhwar <sbadhwar@redhat.com>
 Date: 23/04/2017
 '''
+import inspect
 import statsd
 import threading
+import time
 
-class StatsdPlugin:
+class StatsdPlugin(object):
     '''
     StatsdPlugin provides a wrapper to the plugins through which they can
     register to a common interface to run and provide data.
@@ -34,82 +36,101 @@ class StatsdPlugin:
         self.application_name = application_name
         self.run_interval = run_interval
 
-        #Set if the threads should run or not
-        self.__run_threads = True
+        #Maintain a flag to check if thread execution should take place or not
+        self.run_threads = True
 
-        #Try connecting to the Statsd Server
-        self.statsd_client = statsd.StatsClient(self.host, self.port)
-
-        #Initialize the registered methods list
-        self.registered_methods = []
-
-        #Initialize the threads list
-        self.threads = []
+        #Initialize the metric method collection list
+        self.registered_collectors = []
 
         #Initialize the result dictionary
-        self.thread_results = {}
+        self.collected_metrics = {}
 
-    def __build_thread(self, method):
-        '''
-        Builds a thread for execution
-        Params:
-         - method: The target method, that needs to be executed
-        Returns: None
-        '''
+        #Initialize the runtime threads list
+        self.runtime_thread = []
 
-        t = threading.Thread(target=method, args=(self.thread_results,), daemon=True)
-        self.threads.append(t)
+        #Connect to the Statsd Server
+        self.statsd_client = statsd.StatsClient(self.host, self.port)
 
-    def __report_results(self):
+    def __get_collectors(self):
         '''
-        Reports the collected results to the statsd server
+        Get the list of all the methods that are their in the derived class and
+        which needs to be run.
         Params: None
         Returns: None
         '''
 
-        for key in self.thread_results:
-            metric_name = self.application_name + "." + str(key)
-            self.statsd_client.gauge(metric_name, self.thread_results[key])
-        self.thread_results.clear()
+        print "Get collectors"
+        for base_class in self.__class__.__bases__:
+            for subclass in base_class.__subclasses__():
+                for method in subclass.__dict__.values():
+                    if callable(method):
+                        self.registered_collectors.append(method)
 
-    def register_method(self, method):
+    def __execute_collectors(self):
         '''
-        Registers a method for execution and result collection
-        Params:
-         - method: The method which needs to be executed
-        Raises: TypeError if the provided parameter is not a callable
-        Return: True on success
+        Execute the collectors to collect the metrics
+        Params: None
+        Returns: None
         '''
 
-        if not callable(method):
-            raise TypeError("Provided method is not callable")
+        collector_threads = []
+        for method in self.registered_collectors:
+            self.runtime_thread.append(threading.Thread(
+                target=method,
+                args=(self,)
+            ))
 
-        self.__build_thread(method)
-        self.registered_methods.append(method)
-        return True
+        #Run the threads
+        for thread in self.runtime_thread:
+            thread.start()
+
+        #Wait for threads to exit
+        for thread in self.runtime_thread:
+            thread.join()
+
+        self.send_metrics()
+
+        self.runtime_thread[:] = [] #Clear the threads
+
+    def send_metrics(self):
+        '''
+        Report the collected metrics to the StatsD server
+        Params: None
+        Returns: None
+        '''
+
+        for key in self.collected_metrics:
+            metric_name = self.application_name + '.' + key
+            self.statsd_client.gauge(metric_name, self.collected_metrics[key])
 
     def start(self):
         '''
-        Start the thread execution
+        Start the Collector execution
         Params: None
         Returns: None
         '''
 
-        while self.__run_threads:
-            for thread in self.threads:
-                thread.start()
-
-            for thread in self.threads:
-                thread.join()
-
-            self.__report_results()
+        self.__get_collectors()
+        while self.run_threads:
+            self.__execute_collectors()
             time.sleep(self.run_interval)
+
+    def store_results(self, metric_name, metric_value):
+        '''
+        Stores the results in the result dictionary
+        Params:
+         - metric_name: The name of the metric to store
+         - metric_value: The value of the metric
+        Returns: None
+        '''
+
+        self.collected_metrics[metric_name] = metric_value
 
     def stop(self):
         '''
-        Stops the thread execution and causes the program to exit
+        Stops the collector execution by setting the run thread flag to False
         Params: None
         Returns: None
         '''
 
-        self.__run_threads = False
+        self.run_threads = False
